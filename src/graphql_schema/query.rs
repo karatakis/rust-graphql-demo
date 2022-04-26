@@ -1,35 +1,14 @@
 use juniper::{
-    meta::MetaType, Arguments, EmptyMutation, EmptySubscription, ExecutionResult, Executor,
-    GraphQLType,GraphQLValueAsync, GraphQLValue, Registry, RootNode, ScalarValue
+    meta::{MetaType, Field}, Arguments, EmptyMutation, EmptySubscription, ExecutionResult, Executor,
+    GraphQLType,GraphQLValueAsync, GraphQLValue, Registry, RootNode, ScalarValue,
 };
 use sea_schema::sqlite::{Schema};
+use super::single_query::{SingleQuery, SingleQueryInfo};
 
 pub async fn get_graphql_schema(schema: &Schema) -> RootNode<'static, Query, EmptyMutation<()>, EmptySubscription<()>> {
-    let fields = schema
-        .tables
-        .iter()
-        .map(|table| {
-            let fields = table
-                .columns
-                .iter()
-                .map(|column| {
-                    QueryTypeInfo {
-                        name: upper(&column.name),
-                        fields: Vec::new()
-                    }
-                })
-                .collect();
-
-            QueryTypeInfo {
-                name: format!("All{}", upper(&table.name)),
-                fields
-            }
-        })
-        .collect();
-
     let info = QueryTypeInfo {
         name: "Query".into(),
-        fields,
+        schema: schema.clone(),
     };
 
     let schema: RootNode<'_, _, _, _> = RootNode::new_with_info(
@@ -51,26 +30,58 @@ impl<S> GraphQLType<S> for Query
 where
     S: ScalarValue
 {
-    fn name(info: &Self::TypeInfo) -> Option<&str> {
+    fn name(info: &QueryTypeInfo) -> Option<&str> {
         Some(info.name.as_str())
     }
 
-    fn meta<'r>(info: &Self::TypeInfo, registry: &mut Registry<'r, S>) -> MetaType<'r, S>
+    fn meta<'r>(info: &QueryTypeInfo, registry: &mut Registry<'r, S>) -> MetaType<'r, S>
     where
         S: 'r,
     {
-        let fields = info
-            .fields
+        let single_queries: Vec<Field<S>> = info
+            .schema
+            .tables
             .iter()
-            .map(|field| {
-                println!("A: {:?}", field);
+            .map(|table| {
+                let name = format!("single_{}", table.name.as_str());
+                let query = SingleQuery {
+                    info: SingleQueryInfo {
+                        name,
+                        meta: table.clone()
+                    }
+                };
+
+                println!("A: {:?}", query);
+
                 registry
-                    .field::<Vec<QueryTypeInfo>>(field.name.as_str(), field)
+                    .field::<SingleQuery>(query.info.name.as_str(), &query.info)
                     .argument(
                         registry.arg::<String>("id", &())
                     )
             })
-            .collect::<Vec<_>>();
+            .collect();
+
+        let batch_queries: Vec<Field<S>> = info
+            .schema
+            .tables
+            .iter()
+            .map(|table| {
+                let name = format!("batch_{}", table.name.as_str());
+                let query = SingleQuery {
+                    info: SingleQueryInfo {
+                        name,
+                        meta: table.clone()
+                    }
+                };
+
+                println!("A: {:?}", query);
+
+                registry
+                    .field::<Vec<SingleQuery>>(query.info.name.as_str(), &query.info)
+            })
+            .collect();
+
+        let fields = [single_queries, batch_queries].concat();
 
         registry
             .build_object_type::<Query>(info, &fields)
@@ -85,7 +96,7 @@ where
     type Context = ();
     type TypeInfo = QueryTypeInfo;
 
-    fn type_name<'i>(&self, info: &'i Self::TypeInfo) -> Option<&'i str> {
+    fn type_name<'i>(&self, info: &'i QueryTypeInfo) -> Option<&'i str> {
         <Self as GraphQLType<S>>::name(info)
     }
 }
@@ -97,51 +108,11 @@ where
 
 }
 
-#[derive(Debug)]
 pub struct QueryTypeInfo {
-    name: String,
-    fields: Vec<QueryTypeInfo>
+    pub name: String,
+    pub schema: Schema
 }
 
-impl<S> GraphQLType<S> for QueryTypeInfo
-where
-    S: ScalarValue
-{
-    fn name(info: &Self::TypeInfo) -> Option<&str> {
-        Some(info.name.as_str())
-    }
-
-    fn meta<'r>(info: &Self::TypeInfo, registry: &mut Registry<'r, S>) -> MetaType<'r, S>
-    where
-        S: 'r,
-    {
-        let fields = info
-            .fields
-            .iter()
-            .map(|field| {
-                println!("B: {:?}", field);
-                registry.field::<String>(field.name.as_str(), &())
-            })
-            .collect::<Vec<_>>();
-
-        registry
-            .build_object_type::<Query>(info, &fields)
-            .into_meta()
-    }
-}
-
-impl<S> GraphQLValue<S> for QueryTypeInfo
-where
-    S: ScalarValue
-{
-    type Context = ();
-    type TypeInfo = QueryTypeInfo;
-
-    fn type_name<'i>(&self, info: &'i Self::TypeInfo) -> Option<&'i str> {
-        <Self as GraphQLType<S>>::name(info)
-    }
-}
-
-fn upper(s: &String) -> String {
-    s[0..1].to_uppercase() + &s[1..]
+pub enum QueryTypesEnum {
+    Single(SingleQuery)
 }
